@@ -1,0 +1,9 @@
+keras>=3.3
+tensorflow>=2.16   # or torch>=2.2 with KERAS_BACKEND=torch
+numpy
+pandas
+scipy
+scikit-learn>=1.3
+opencv-python-headless
+matplotlib
+jinja2              # pandas.DataFrame.to_latex
