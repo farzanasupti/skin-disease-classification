@@ -62,6 +62,11 @@ def load_or_build_split(cfg: Config):
     split_csv = os.path.join(cfg.out_dir, "splits.csv")
     if os.path.exists(split_csv):
         table = pd.read_csv(split_csv)
+        if "phash" not in table.columns:
+            raise RuntimeError(
+                f"{split_csv} was made by the old difference-hash-only grouping, which missed "
+                "mirrored and rotated copies; start from a fresh --out-dir"
+            )
         if list(table["file"]) != list(ds.files):
             raise RuntimeError(
                 f"{split_csv} does not match the images on disk; "
