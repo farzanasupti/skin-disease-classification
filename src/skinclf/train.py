@@ -22,9 +22,9 @@ class Config:
     seed: int = 42
     test_fraction: float = 0.15
     n_folds: int = 5
-    hash_threshold: int = 4
+    hash_threshold: int = 8
     batch_size: int = 32
-    lr: float = 1e-4
+    lr: float = 1e-3
     l2: float = 1e-4
     epochs_custom: int = 150
     epochs_transfer: int = 50

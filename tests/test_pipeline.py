@@ -58,6 +58,23 @@ def _make_dataset(root, per_class=24, seed=0):
                 small = cv2.resize(img, (60, 60))
                 cv2.imwrite(os.path.join(root, "train", cls, f"copy_{cls}_{i}.png"), small)
                 planted.append(("hash", cls, i))
+            if i % 8 == 3:
+                # Copies the way pre-augmented datasets make them: shrunk onto a
+                # black canvas, mirrored, turned upside down, brightened.
+                canvas = np.zeros((96, 96, 3), np.uint8)
+                canvas[24:72, 24:72] = cv2.resize(img, (48, 48), interpolation=cv2.INTER_AREA)
+                bright = np.clip(img.astype(np.int16) + 30, 0, 255).astype(np.uint8)
+                for kind, variant in (("padded", canvas), ("mirror", cv2.flip(img, 1)),
+                                      ("rot180", cv2.rotate(img, cv2.ROTATE_180)), ("bright", bright)):
+                    cv2.imwrite(os.path.join(root, "valid", cls, f"copy_{cls}_{i}.{kind}.png"), variant)
+                    planted.append((kind, cls, i))
+            if i % 8 == 5:
+                # Different images on identical black canvases. Each matches its own
+                # original, but they must not match one another through the frame.
+                canvas = np.zeros((96, 96, 3), np.uint8)
+                canvas[24:72, 24:72] = cv2.resize(img, (48, 48), interpolation=cv2.INTER_AREA)
+                cv2.imwrite(os.path.join(root, "train", cls, f"framed_{cls}_{i}.png"), canvas)
+                planted.append(("framed", cls, i))
     return planted
 
 
@@ -70,14 +87,36 @@ def test_source_stem_strips_export_suffixes():
 def test_grouping_catches_planted_duplicates(tmp_path):
     planted = _make_dataset(tmp_path)
     ds = load_folder_dataset([str(tmp_path / "train"), str(tmp_path / "valid")], 32)
-    groups, stats = build_groups(ds, hash_threshold=4)
-    n_name = sum(1 for p in planted if p[0] == "name")
-    n_hash = sum(1 for p in planted if p[0] == "hash")
-    assert stats["n_groups"] == len(ds.labels) - n_name - n_hash
+    groups, stats = build_groups(ds)
+    # Every planted copy removes exactly one group; nothing else may merge,
+    # in particular not the unrelated images framed on identical black canvases.
+    assert stats["n_groups"] == len(ds.labels) - len(planted)
     assert stats["groups_with_conflicting_labels"] == 0
+    assert stats["links_from_flips_rotations"] >= sum(p[0] in ("mirror", "rot180") for p in planted)
+    assert stats["border_cropped_images"] > 0
     for kind, cls, i in planted:
-        idx = [k for k, f in enumerate(ds.files) if f"{cls}_{i}_jpg" in f or f"copy_{cls}_{i}." in f]
+        idx = [k for k, f in enumerate(ds.files)
+               if f"{cls}_{i}_jpg" in f or f"copy_{cls}_{i}." in f or f"framed_{cls}_{i}." in f]
         assert len(set(groups[idx])) == 1, (kind, cls, i)
+    framed = [k for k, f in enumerate(ds.files) if "framed_" in f]
+    assert len(framed) > 3 and len(set(groups[framed])) == len(framed)
+
+
+def test_hashes_survive_padding_flips_and_brightness():
+    from skinclf.data import image_hashes
+
+    rng = np.random.default_rng(3)
+    field = rng.uniform(0, 255, (6, 6, 3)).astype(np.float32)
+    img = cv2.resize(field, (64, 64), interpolation=cv2.INTER_CUBIC).clip(0, 255).astype(np.uint8)
+    canvas = np.zeros((128, 128, 3), np.uint8)
+    canvas[32:96, 32:96] = img
+    d0, p0, c0 = image_hashes(img)
+    d1, p1, c1 = image_hashes(canvas)
+    assert not c0 and c1
+    ham = lambda a, b: bin(int(a) ^ int(b)).count("1")  # noqa: E731
+    assert ham(d0[0], d1[0]) <= 8 and ham(p0[0], p1[0]) <= 8
+    dm, pm, _ = image_hashes(cv2.flip(img, 1))
+    assert ham(d0[1], dm[0]) <= 8 and ham(p0[1], pm[0]) <= 8
 
 
 def test_splits_are_grouped_and_cover_everything(tmp_path):
