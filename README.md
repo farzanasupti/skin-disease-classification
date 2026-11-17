@@ -4,7 +4,7 @@ Code for the paper *Ensemble Deep Learning for Skin Disease Classification with 
 
 The study compares a compact custom CNN with seven frozen ImageNet backbones (VGG16, ResNet50, MobileNetV2, EfficientNetB0, DenseNet121, InceptionV3, Xception) on five skin conditions: acne, hyperpigmentation, nail psoriasis, Stevens–Johnson syndrome/toxic epidermal necrolysis (SJS-TEN) and vitiligo. Three things are designed to make the reported numbers trustworthy:
 
-- **Duplicate-aware splits.** The dataset has no patient identifiers and was collected partly from online sources. Images are therefore grouped by source filename *and* by perceptual hash before splitting, and a group never crosses the test set or a cross-validation fold.
+- **Duplicate-aware splits.** The dataset has no patient identifiers, was collected partly from online sources, and already contains augmented copies: recoloured, shrunk onto black canvases, mirrored and rotated. Images are therefore grouped by source filename *and* by two perceptual hashes, which must both agree, after cropping any frame and allowing for flips and rotations. A group never crosses the test set or a cross-validation fold.
 - **Selection on validation only.** Five-fold grouped cross-validation chooses the best model and the ensemble members. The held-out test set is used only for reporting.
 - **Uncertainty that is measured, not asserted.** Monte Carlo dropout runs at inference, and we report calibration (ECE, NLL, Brier), how well uncertainty flags errors, and accuracy after referring the most uncertain cases.
 
