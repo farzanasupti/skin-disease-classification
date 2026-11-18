@@ -19,6 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from skinclf.data import (  # noqa: E402
+    augmentation_families,
     build_groups,
     check_no_group_leakage,
     load_folder_dataset,
@@ -75,6 +76,15 @@ def _make_dataset(root, per_class=24, seed=0):
                 canvas[24:72, 24:72] = cv2.resize(img, (48, 48), interpolation=cv2.INTER_AREA)
                 cv2.imwrite(os.path.join(root, "train", cls, f"framed_{cls}_{i}.png"), canvas)
                 planted.append(("framed", cls, i))
+            if i % 8 == 7:
+                # Named the way the dataset's augmentation tool names copies: a
+                # tight crop and a heavy blur, which a hash cannot tie to the
+                # original. Only the filename keeps them in its group.
+                crop = cv2.resize(img[8:40, 20:52], (64, 64), interpolation=cv2.INTER_CUBIC)
+                blur = cv2.GaussianBlur(img, (0, 0), 6)
+                for kind, variant in (("Crop-0350_0300", crop), ("superpixels-100", blur)):
+                    cv2.imwrite(os.path.join(root, "train", cls, f"{kind}{cls}_{i}.jpg"), variant)
+                    planted.append((kind, cls, i))
     return planted
 
 
@@ -82,6 +92,19 @@ def test_source_stem_strips_export_suffixes():
     assert source_stem("acne_12_jpg.rf.3f2a9c.jpg") == "acne_12"
     assert source_stem("IMG_0001.jpeg") == "IMG_0001"
     assert source_stem("x_png.rf.ab12.png") == "x"
+
+
+def test_augmentation_families():
+    stems = ["3227", "Crop-0350_03003227", "flip--13227", "padd-00_01003227", "Resize-450_4003227",
+             "vitiligo-66", "hue-100vitiligo-66", "27", "superpixels-10027", "Crop-0350_0300999", "3227"]
+    labels = ["a"] * 10 + ["b"]
+    fam, orig = augmentation_families(stems, labels)
+    assert fam[:5] == ["a/3227"] * 5
+    assert fam[5:7] == ["a/vitiligo-66"] * 2
+    assert fam[7:9] == ["a/27"] * 2  # longest matching original, not a shorter suffix
+    assert fam[9] == "a/Crop-0350_0300999"  # prefixed but no original: kept apart
+    assert fam[10] == "b/3227"  # families never cross classes
+    assert orig.tolist() == [True, False, False, False, False, True, False, True, False, False, True]
 
 
 def test_grouping_catches_planted_duplicates(tmp_path):
@@ -96,10 +119,14 @@ def test_grouping_catches_planted_duplicates(tmp_path):
     assert stats["border_cropped_images"] > 0
     for kind, cls, i in planted:
         idx = [k for k, f in enumerate(ds.files)
-               if f"{cls}_{i}_jpg" in f or f"copy_{cls}_{i}." in f or f"framed_{cls}_{i}." in f]
+               if f"{cls}_{i}_jpg" in f or f"copy_{cls}_{i}." in f or f"framed_{cls}_{i}." in f
+               or f"0{cls}_{i}." in f]
         assert len(set(groups[idx])) == 1, (kind, cls, i)
     framed = [k for k, f in enumerate(ds.files) if "framed_" in f]
     assert len(framed) > 3 and len(set(groups[framed])) == len(framed)
+    n_aug = sum(p[0].startswith(("Crop", "superpixels")) for p in planted)
+    assert n_aug > 0 and stats["augmented_copies"] == n_aug
+    assert stats["original_images"] == len(ds.labels) - n_aug
 
 
 def test_hashes_survive_padding_flips_and_brightness():

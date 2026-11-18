@@ -3,8 +3,14 @@
 The dataset has no patient identifiers, so splits are made over *groups of
 images that share a source*. Two images land in the same group when either
 
-1. their filenames reduce to the same source stem (export tools such as
-   Roboflow append ``_jpg.rf.<hash>`` to every copy of one original), or
+1. their filenames reduce to the same source stem. Export tools such as
+   Roboflow append ``_jpg.rf.<hash>`` to every copy of one original, and the
+   augmentation tool used for this dataset names each copy
+   ``<operation>-<parameters><original stem>`` (``Crop-0350_03003227`` is a
+   crop of ``3227``). The dataset is 341 photographs, each stored with 27 such
+   crops, paddings, superpixel renderings, hue and saturation shifts, flips
+   and resizes. Crops and superpixel copies do not look alike to a hash, so
+   only the filename keeps the family together. Or
 2. they look the same: after cropping any uniform border, a 64-bit difference
    hash *and* a 64-bit DCT hash both agree within ``hash_threshold`` bits, for
    the image as it is or for one of its flips or 90-degree rotations.
@@ -16,7 +22,9 @@ through union-find merges unrelated images of every class into one group.
 Requiring both hashes to agree prevents that.
 
 A group never spans the test set and a training fold, so a near-copy of a
-test image cannot be seen during training.
+test image cannot be seen during training. Images that are not augmented
+copies are flagged as originals; evaluation counts originals only, because the
+copies of one photograph are not independent test cases.
 """
 
 from __future__ import annotations
@@ -33,6 +41,10 @@ from sklearn.model_selection import StratifiedGroupKFold
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 _RF_SUFFIX = re.compile(r"\.rf\.[0-9a-f]+$", re.IGNORECASE)
 _EXT_TOKEN = re.compile(r"[_.-](jpe?g|png|bmp|webp)$", re.IGNORECASE)
+# <operation>-<numeric parameters>, prefixed to the original stem by the tool
+# that pre-augmented the dataset. The parameters run straight into the stem,
+# so the stem is recovered by matching against the originals' names.
+_AUG_PREFIX = re.compile(r"^(Crop|padd|superpixels|hue|saturation|flip|Resize)-[-\d_]*")
 
 
 @dataclass
@@ -44,6 +56,8 @@ class Dataset:
     dhash: np.ndarray  # (N, 8) uint64 difference hash of each dihedral variant; [:, 0] = as stored
     phash: np.ndarray  # (N, 8) uint64 DCT hash of each dihedral variant
     border_cropped: np.ndarray  # (N,) bool, a uniform border was removed before hashing
+    family: np.ndarray  # (N,) str, "<class>/<original stem>" shared by an original and its augmented copies
+    is_original: np.ndarray  # (N,) bool, not an augmented copy
 
 
 def source_stem(filename: str) -> str:
@@ -51,6 +65,33 @@ def source_stem(filename: str) -> str:
     stem = os.path.splitext(os.path.basename(filename))[0]
     stem = _RF_SUFFIX.sub("", stem)
     return _EXT_TOKEN.sub("", stem)
+
+
+def augmentation_families(stems: list[str], labels: list) -> tuple[list[str], np.ndarray]:
+    """Map every image to the original it was made from; flag the originals.
+
+    An image is an augmented copy when its stem is an augmentation prefix
+    followed by the stem of an original in the same class (the longest such
+    original wins). A prefixed name with no matching original keeps its own
+    stem and is not counted as an original.
+    """
+    originals: dict = {}
+    is_aug = [bool(_AUG_PREFIX.match(s)) for s in stems]
+    for s, lab, aug in zip(stems, labels, is_aug):
+        if not aug:
+            originals.setdefault(lab, set()).add(s)
+    family = []
+    for s, lab, aug in zip(stems, labels, is_aug):
+        base = s
+        if aug:
+            for start in range(len(s)):
+                # Shortest prefix = longest original stem; the prefix must be
+                # nothing but an operation name and its numeric parameters.
+                if s[start:] in originals.get(lab, ()) and _AUG_PREFIX.fullmatch(s[:start]):
+                    base = s[start:]
+                    break
+        family.append(f"{lab}/{base}")
+    return family, ~np.asarray(is_aug, dtype=bool)
 
 
 def _bits_to_u64(bits: np.ndarray) -> np.uint64:
@@ -147,6 +188,9 @@ def load_folder_dataset(roots: list[str], img_size: int) -> Dataset:
                 files.append(os.path.join(os.path.basename(os.path.normpath(root)), cls, f))
     if not images:
         raise FileNotFoundError(f"no images found under {roots}")
+    family, is_original = augmentation_families(
+        [source_stem(f) for f in files], [classes[l] for l in labels]
+    )
     return Dataset(
         images=np.stack(images),
         labels=np.asarray(labels, dtype=np.int64),
@@ -155,6 +199,8 @@ def load_folder_dataset(roots: list[str], img_size: int) -> Dataset:
         dhash=np.stack(dh),
         phash=np.stack(ph),
         border_cropped=np.asarray(cropped, dtype=bool),
+        family=np.asarray(family),
+        is_original=is_original,
     )
 
 
@@ -192,7 +238,7 @@ def build_groups(ds: Dataset, hash_threshold: int = 8) -> tuple[np.ndarray, dict
     n = len(ds.labels)
     uf = _UnionFind(n)
 
-    stems = [f"{ds.classes[l]}/{source_stem(f)}" for f, l in zip(ds.files, ds.labels)]
+    stems = list(ds.family)
     first_seen: dict[str, int] = {}
     name_links = 0
     for i, s in enumerate(stems):
@@ -245,6 +291,9 @@ def build_groups(ds: Dataset, hash_threshold: int = 8) -> tuple[np.ndarray, dict
         "links_from_flips_rotations": int(flip_rotation_links),
         "border_cropped_images": int(ds.border_cropped.sum()),
         "groups_with_conflicting_labels": int(mixed),
+        "original_images": int(ds.is_original.sum()),
+        "augmented_copies": int((~ds.is_original).sum()),
+        "augmentation_families": int(len(np.unique(ds.family[~ds.is_original]))),
         "hash_threshold_bits": int(hash_threshold),
     }
     return groups, stats
@@ -292,6 +341,7 @@ def split_table(ds: Dataset, groups: np.ndarray, fold: np.ndarray) -> pd.DataFra
             "label": [ds.classes[i] for i in ds.labels],
             "group": groups,
             "fold": fold,
+            "original": ds.is_original,
             "dhash": [f"{int(h):016x}" for h in ds.dhash[:, 0]],
             "phash": [f"{int(h):016x}" for h in ds.phash[:, 0]],
         }

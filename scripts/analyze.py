@@ -10,6 +10,11 @@ result is typed by hand.
 Everything that chooses something (the best model, the ensemble members) is
 decided on cross-validation folds only; the held-out test set is used for
 reporting, never for selection.
+
+Validation and test metrics count original photographs only. Training and
+early stopping use every image, but the 27 augmented copies of a photograph are
+not independent cases, so scoring them would multiply one photograph's result
+28-fold and narrow the confidence intervals without new evidence.
 """
 
 from __future__ import annotations
@@ -82,6 +87,9 @@ def main() -> None:
     split = pd.read_csv(os.path.join(args.out_dir, "splits.csv"))
     labels = split["label"].map({c: i for i, c in enumerate(classes)}).to_numpy()
     groups = split["group"].to_numpy()
+    if "original" not in split.columns:
+        sys.exit("splits.csv has no 'original' column: it predates grouping by augmentation family.")
+    original = split["original"].astype(bool).to_numpy()
     n_folds = cfg["n_folds"]
 
     runs = load_runs(args.out_dir, n_folds)
@@ -92,6 +100,16 @@ def main() -> None:
     if len(complete) < 2:
         sys.exit("Need at least two models with all folds finished.")
 
+    # Score originals only: restrict saved predictions to them (val per fold, test once).
+    for per_fold in runs.values():
+        for r in per_fold.values():
+            keep = original[r["val_idx"]]
+            r["val_idx"], r["val_probs"] = r["val_idx"][keep], r["val_probs"][keep]
+            if "val_mc" in r:
+                r["val_mc"] = r["val_mc"][:, keep]
+            keep = original[r["test_idx"]]
+            r["test_idx"], r["test_probs"] = r["test_idx"][keep], r["test_probs"][keep]
+            r["test_mc"] = r["test_mc"][:, keep]
     test_idx = runs[complete[0]][0]["test_idx"]
     y_test, g_test = labels[test_idx], groups[test_idx]
 
@@ -252,8 +270,10 @@ def write_numbers(path, cfg, split, classes, test, unc, eff, cv_mean, cv_std, fr
         "n_images": len(split),
         "n_classes": len(classes),
         "n_groups": split["group"].nunique(),
-        "n_test_images": int((split.fold == -1).sum()),
-        "n_dev_images": int((split.fold >= 0).sum()),
+        "n_test_images": int(((split.fold == -1) & split.original).sum()),
+        "n_dev_images": int(((split.fold >= 0) & split.original).sum()),
+        "n_test_images_with_copies": int((split.fold == -1).sum()),
+        "n_dev_images_with_copies": int((split.fold >= 0).sum()),
         "n_folds": cfg["n_folds"],
         "mc_samples": cfg["mc_samples"],
         **{k: v for k, v in grouping.items() if isinstance(v, int)},

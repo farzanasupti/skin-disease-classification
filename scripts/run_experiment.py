@@ -67,6 +67,11 @@ def load_or_build_split(cfg: Config):
                 f"{split_csv} was made by the old difference-hash-only grouping, which missed "
                 "mirrored and rotated copies; start from a fresh --out-dir"
             )
+        if "original" not in table.columns:
+            raise RuntimeError(
+                f"{split_csv} predates grouping by augmentation family, which split the 28 "
+                "copies of each photograph across partitions; start from a fresh --out-dir"
+            )
         if list(table["file"]) != list(ds.files):
             raise RuntimeError(
                 f"{split_csv} does not match the images on disk; "
@@ -86,10 +91,16 @@ def load_or_build_split(cfg: Config):
 
 
 def describe_split(ds, fold) -> pd.DataFrame:
+    """Images per partition and class, then the same for originals only."""
     part = np.where(fold == -1, "test", "fold" + fold.astype(str))
-    df = pd.crosstab(pd.Series(part, name="partition"), pd.Series(np.array(ds.classes)[ds.labels], name="class"))
-    df["total"] = df.sum(axis=1)
-    return df
+    cls = np.array(ds.classes)[ds.labels]
+    tables = []
+    for name, sel in (("all", slice(None)), ("originals", ds.is_original)):
+        df = pd.crosstab(pd.Series(part[sel], name="partition"), pd.Series(cls[sel], name="class"))
+        df["total"] = df.sum(axis=1)
+        df.index = [f"{p} ({name})" for p in df.index]
+        tables.append(df)
+    return pd.concat(tables).rename_axis("partition")
 
 
 def main() -> None:

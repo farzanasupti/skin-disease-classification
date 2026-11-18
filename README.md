@@ -4,7 +4,8 @@ Code for the paper *Ensemble Deep Learning for Skin Disease Classification with 
 
 The study compares a compact custom CNN with seven frozen ImageNet backbones (VGG16, ResNet50, MobileNetV2, EfficientNetB0, DenseNet121, InceptionV3, Xception) on five skin conditions: acne, hyperpigmentation, nail psoriasis, Stevens–Johnson syndrome/toxic epidermal necrolysis (SJS-TEN) and vitiligo. Three things are designed to make the reported numbers trustworthy:
 
-- **Duplicate-aware splits.** The dataset has no patient identifiers, was collected partly from online sources, and already contains augmented copies: recoloured, shrunk onto black canvases, mirrored and rotated. Images are therefore grouped by source filename *and* by two perceptual hashes, which must both agree, after cropping any frame and allowing for flips and rotations. A group never crosses the test set or a cross-validation fold.
+- **Duplicate-aware splits.** The dataset has no patient identifiers, was collected partly from online sources, and is already augmented: its 9,548 images are 341 photographs, each with 27 cropped, padded, superpixel, recoloured, flipped and resized copies named after the photograph. Images are therefore grouped by source photograph, from those filenames, *and* by two perceptual hashes, which must both agree, after cropping any frame and allowing for flips and rotations. A group never crosses the test set or a cross-validation fold.
+- **Originals only in evaluation.** Models train on every image, but validation and test metrics count the original photographs only, since a photograph's copies are not independent cases.
 - **Selection on validation only.** Five-fold grouped cross-validation chooses the best model and the ensemble members. The held-out test set is used only for reporting.
 - **Uncertainty that is measured, not asserted.** Monte Carlo dropout runs at inference, and we report calibration (ECE, NLL, Brier), how well uncertainty flags errors, and accuracy after referring the most uncertain cases.
 
@@ -33,7 +34,7 @@ python scripts/analyze.py --out-dir outputs --paper-dir paper/generated
 
 | Path | Contents |
 |---|---|
-| `outputs/splits.csv` | Every image with its group, partition and perceptual hash |
+| `outputs/splits.csv` | Every image with its group, partition, original/copy flag and perceptual hash |
 | `outputs/grouping_stats.json` | How many duplicates were found and how |
 | `outputs/runs/<model>_fold<k>/` | Training history, per-run summary, validation/test probabilities and MC-dropout samples |
 | `outputs/results/` | Aggregated metrics, confidence intervals, significance tests (CSV/JSON) |
