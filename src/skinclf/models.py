@@ -126,10 +126,20 @@ def _dense(units, l2, name=None, activation=None, dtype=None):
 
 
 def build_custom_cnn(x, l2: float):
+    """Four blocks of two 3x3 convolutions, each batch-normalised.
+
+    Without batch normalisation this eight-layer network, trained from scratch,
+    sometimes never leaves the trivial solution: one fold of the 2026-11-17
+    Kaggle run sat at chance (loss ln 5) from the first epoch and stopped
+    early, while other seeds trained.
+    """
     x = ImagenetPreprocess("scale01", name="preprocess")(x)
     for block, filters in enumerate([16, 32, 64, 192], start=1):
         for conv in (1, 2):
-            x = layers.Conv2D(filters, 3, padding="same", name=f"block{block}_conv{conv}")(x)
+            x = layers.Conv2D(
+                filters, 3, padding="same", use_bias=False, name=f"block{block}_conv{conv}"
+            )(x)
+            x = layers.BatchNormalization(name=f"block{block}_bn{conv}")(x)
             x = layers.LeakyReLU(negative_slope=0.1)(x)
         x = layers.MaxPooling2D(2, name=f"block{block}_pool")(x)
     x = layers.GlobalAveragePooling2D()(x)
