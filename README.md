@@ -1,6 +1,6 @@
-# Skin disease classification with duplicate-aware validation and uncertainty-based referral
+# Counting photographs, not images: duplicate-aware evaluation of skin disease classifiers
 
-Code for the paper *Ensemble Deep Learning for Skin Disease Classification with Duplicate-Aware Validation and Uncertainty-Based Referral* (in preparation).
+Code for the paper *Counting Photographs, Not Images: Duplicate-Aware Evaluation of Deep Learning for Skin Disease Classification* (in preparation).
 
 The study compares a compact custom CNN with seven frozen ImageNet backbones (VGG16, ResNet50, MobileNetV2, EfficientNetB0, DenseNet121, InceptionV3, Xception) on five skin conditions: acne, hyperpigmentation, nail psoriasis, Stevens–Johnson syndrome/toxic epidermal necrolysis (SJS-TEN) and vitiligo. Three things are designed to make the reported numbers trustworthy:
 
