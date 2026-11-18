@@ -26,8 +26,9 @@
 
 \title{Ensemble Deep Learning for Skin Disease Classification with Duplicate-Aware Validation and Uncertainty-Based Referral}
 
-% Solo-authored version (decision of 2026-11-16). Former collaborators on the
-% July 2026 preprint can be added if they contribute to this study and agree.
+% Continues and corrects the July 2026 preprint. Its co-authors are not
+% continuing; a new collaborator can be added if they contribute substantially
+% to this study and approve the final text.
 \author{Farzana Rahman Supti}
 \affil{Department of Electrical and Computer Engineering, North South University, Dhaka, Bangladesh\\ \texttt{farzanasupti@gmail.com}}
 \date{}
@@ -56,7 +57,7 @@ We study a public five-class dataset of acne, hyperpigmentation, nail psoriasis,
   \item a cross-architecture ensemble whose members are selected on validation folds only, evaluated on a held-out test set with group-bootstrap confidence intervals;
   \item an evaluation of MC-dropout uncertainty for calibration, error detection and uncertainty-based referral.
 \end{enumerate}
-All code, the exact splits and every model prediction are released so that each number in this paper can be regenerated.
+All code, the exact splits and every model prediction are released so that each number in this paper can be regenerated. This study supersedes an earlier preprint on the same dataset, whose results were affected by the duplicate problem described here (see \emph{Relation to an earlier preprint}).
 
 % ===========================================================================
 \section*{Results}
@@ -139,7 +140,7 @@ The dataset is publicly available from Mendeley Data (\href{https://doi.org/10.1
 All code, the Kaggle notebook used to produce the results, every model's validation and test predictions, and the scripts that generate each table and figure are available at \url{https://github.com/farzanasupti/skin-disease-classification} \tbd{and archived at Zenodo, DOI}.
 
 \section*{Relation to an earlier preprint}
-An earlier preprint on this dataset (ResearchGate, July 2026, doi:10.13140/RG.2.2.27428.03208), on which the present author was first author, reported results that could not be reproduced from its code. Its pretrained models also received incorrectly preprocessed inputs. The present study replaces it entirely: the experiments were redesigned and rerun, and the text was rewritten. None of its reported results are reused here.
+This study continues and corrects an earlier preprint on the same dataset (ResearchGate, July 2026, doi:10.13140/RG.2.2.27428.03208), on which the present author was first author. \textbf{The results of that preprint are superseded and should not be cited as evidence of model performance.} Three problems affect them. First, the data were split by image. Because the dataset consists of \res{data}{original_images} photographs, each released with 27 augmented copies (Results), an image-level split places copies of nearly every test photograph in the training data, so the accuracies it reports are inflated. Second, its pretrained models received incorrectly preprocessed inputs. Third, its reported results could not be reproduced from its code. The present study redesigned and reran every experiment and rewrote the text; none of the preprint's results, figures or text are reused. The co-authors of the preprint did not take part in the present study.
 
 \section*{Acknowledgements}
 The author thanks the co-authors of the earlier preprint for their contributions to that work.
