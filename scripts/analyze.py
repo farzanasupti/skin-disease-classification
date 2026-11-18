@@ -304,7 +304,7 @@ def write_numbers(path, cfg, split, classes, test, unc, eff, cv_mean, cv_std, fr
                 lines.append(_macro(key, f"cv_{metric}", fmt_pct(cv_mean.loc[m, metric])))
                 lines.append(_macro(key, f"cv_{metric}_sd", fmt_pct(cv_std.loc[m, metric])))
             e = eff.loc[m]
-            lines.append(_macro(key, "params_trainable", f"{e.params_trainable:,}".replace(",", "{,}")))
+            lines.append(_macro(key, "params_trainable", f"{int(e.params_trainable):,}".replace(",", "{,}")))
             lines.append(_macro(key, "params_total_m", f"{e.params_total / 1e6:.2f}"))
             lines.append(_macro(key, "ms_batched", f"{e.ms_per_image_batched:.1f}"))
 
