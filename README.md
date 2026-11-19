@@ -1,6 +1,6 @@
 # Counting photographs, not images: duplicate-aware evaluation of skin disease classifiers
 
-This is the code for my paper *Counting Photographs, Not Images: Duplicate-Aware Evaluation of Deep Learning for Skin Disease Classification* (in preparation).
+This is the code for our paper *Counting Photographs, Not Images: Duplicate-Aware Evaluation of Deep Learning for Skin Disease Classification* (with MD Mahi Sarkar, in preparation).
 
 I compare a small custom CNN with seven frozen ImageNet backbones (VGG16, ResNet50, MobileNetV2, EfficientNetB0, DenseNet121, InceptionV3 and Xception) on five skin conditions: acne, hyperpigmentation, nail psoriasis, Stevens-Johnson syndrome/toxic epidermal necrolysis (SJS-TEN) and vitiligo.
 
