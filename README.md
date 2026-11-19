@@ -11,7 +11,7 @@ The project started as a simple benchmark. Then, while auditing the dataset, I n
 - **Choosing on validation only.** Five-fold grouped cross-validation picks the best model and the ensemble members. I only look at the held-out test set for the final report.
 - **Checking the uncertainty.** Monte Carlo dropout runs at inference. I report calibration (ECE, NLL, Brier), how well uncertainty picks out errors, and accuracy after referring the least confident cases to a person.
 
-Every number, table and figure in the manuscript comes from `scripts/analyze.py`, run on saved predictions. I don't type any of them in by hand.
+Every number, table and figure in the manuscript comes from `scripts/analyze.py`, run on saved predictions. I don't type any of them in by hand. The manuscript itself will be added here once it's published.
 
 ## Data
 
@@ -40,7 +40,7 @@ python scripts/analyze.py --out-dir outputs --paper-dir paper/generated
 | `outputs/grouping_stats.json` | How many duplicates were found and how |
 | `outputs/runs/<model>_fold<k>/` | Training history, per-run summary, validation/test probabilities and MC-dropout samples |
 | `outputs/results/` | Aggregated metrics, confidence intervals, significance tests (CSV/JSON) |
-| `paper/generated/` | LaTeX tables, figures and `numbers.tex` used by the manuscript |
+| `paper/generated/` | LaTeX tables, figures and `numbers.tex` for the manuscript (written locally, not committed) |
 
 ## Tests
 
@@ -61,7 +61,6 @@ src/skinclf/metrics.py   classification, calibration, uncertainty, group bootstr
 src/skinclf/stats.py     Friedman/Nemenyi across folds, Holm-corrected McNemar on test
 scripts/                 experiment runner and analysis
 notebooks/               Kaggle runner
-paper/                   manuscript source
 ```
 
 ## Licence
