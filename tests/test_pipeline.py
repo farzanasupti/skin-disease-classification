@@ -215,3 +215,45 @@ def test_end_to_end(tmp_path):
         assert (paper / "tables" / f"{t}.tex").exists()
     for f in ("confusion", "reliability", "referral", "cv_folds"):
         assert (paper / "figures" / f"{f}.pdf").exists()
+
+
+def test_hash_only_grouping_ignores_filenames(tmp_path):
+    _make_dataset(tmp_path)
+    ds = load_folder_dataset([str(tmp_path / "train"), str(tmp_path / "valid")], 32)
+    _, stats = build_groups(ds, 8, use_filenames=False)
+    assert stats["links_from_filenames"] == 0
+
+
+@pytest.mark.slow
+def test_inflation_end_to_end(tmp_path):
+    pytest.importorskip("keras")
+    from skinclf.data import split_table
+
+    _make_dataset(tmp_path / "data", per_class=30)
+    roots = [str(tmp_path / "data" / "train"), str(tmp_path / "data" / "valid")]
+    ds = load_folder_dataset(roots, 32)
+    groups, _ = build_groups(ds, 8)
+    fold = make_splits(ds.labels, groups, 0.2, 3, 0)
+    main_split = tmp_path / "splits.csv"
+    split_table(ds, groups, fold).to_csv(main_split, index=False)
+    out = tmp_path / "infl"
+    cmd = [sys.executable, os.path.join(ROOT, "scripts", "run_inflation.py"), "--data-roots", *roots,
+           "--main-split", str(main_split), "--out-dir", str(out), "--img-size", "32",
+           "--epochs-custom", "1", "--epochs-transfer", "1", "--no-pretrained",
+           "--models", "CustomCNN", "MobileNetV2", "--seeds", "0", "1"]
+    subprocess.run(cmd, check=True)
+    r = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    assert "Epoch 1/" not in r.stdout
+    runs = list((out / "runs").glob("*/summary.json"))
+    assert len(runs) == 2 * 3 * 2
+    # No image of the unseen photographs may appear in any split's train/val/test.
+    import pandas as pd
+    unseen = pd.read_csv(main_split)["fold"].to_numpy() == -1
+    for f in (out / "splits").glob("*.csv"):
+        part = pd.read_csv(f)["part"].to_numpy()
+        assert (part[unseen] == "unseen").all() and (part[~unseen] != "unseen").all()
+    paper = tmp_path / "paper"
+    subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "analyze_inflation.py"),
+                    "--out-dir", str(out), "--paper-dir", str(paper)], check=True)
+    assert "res@infl-image@acc_internal" in (paper / "numbers_inflation.tex").read_text()
+    assert (paper / "tables" / "inflation.tex").exists()
