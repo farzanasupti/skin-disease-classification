@@ -227,12 +227,40 @@ def components(edges_i: list, edges_j: list, n: int) -> np.ndarray:
     return connected_components(g, directed=False)[1]
 
 
+def with_photo(meta: pd.DataFrame) -> pd.DataFrame:
+    """Default the photograph to the filename family when no merge was given."""
+    if "photo" not in meta:
+        meta = meta.assign(photo=meta.family)
+    return meta
+
+
+def merge_same_photo(meta: pd.DataFrame, pairs: pd.DataFrame) -> pd.DataFrame:
+    """Put the families of originals listed as the same photograph together.
+
+    ``pairs`` has columns ``file_a`` and ``file_b``, filenames of originals.
+    """
+    fam_of = dict(zip(meta.file[meta.is_original], meta.family[meta.is_original]))
+    parent = {f: f for f in meta.family.unique()}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in zip(pairs.file_a, pairs.file_b):
+        parent[find(fam_of[a])] = find(fam_of[b])
+    return meta.assign(photo=[find(f) for f in meta.family])
+
+
 def grouping_metrics(groups: np.ndarray, meta: pd.DataFrame, seeds=range(5)) -> dict:
-    fam = meta.family.to_numpy()
+    meta = with_photo(meta)
+    fam = meta.photo.to_numpy()
+    src = meta.family.to_numpy()
     cls = meta.cls.to_numpy()
-    orig_idx = {f: i for i, f in enumerate(fam) if meta.is_original.iat[i]}
+    orig_idx = {f: i for i, f in enumerate(src) if meta.is_original.iat[i]}
     copies = np.nonzero(~meta.is_original.to_numpy())[0]
-    cut = np.mean([groups[c] != groups[orig_idx[fam[c]]] for c in copies])
+    cut = np.mean([groups[c] != groups[orig_idx[src[c]]] for c in copies])
     df = pd.DataFrame({"fam": fam, "g": groups})
     intact = float((df.groupby("fam").g.nunique() == 1).mean())
     sizes = np.bincount(groups)
@@ -261,15 +289,17 @@ def grouping_metrics(groups: np.ndarray, meta: pd.DataFrame, seeds=range(5)) -> 
 
 def analyze(meta: pd.DataFrame, feats: dict, chunk: int = 256) -> dict:
     n = len(meta)
-    fam_codes = pd.factorize(meta.family)[0]
+    meta = with_photo(meta)
+    fam_codes = pd.factorize(meta.photo)[0]  # same photograph: the positives
+    src_codes = pd.factorize(meta.family)[0]  # the original each copy was made from
     cls_codes = pd.factorize(meta.cls)[0]
     orig_of = np.full(n, -1)
     first = {}
     for i in np.nonzero(meta.is_original.to_numpy())[0]:
-        first[fam_codes[i]] = i
+        first[src_codes[i]] = i
     for i in range(n):
         if not meta.is_original.iat[i]:
-            orig_of[i] = first[fam_codes[i]]
+            orig_of[i] = first[src_codes[i]]
     methods = (list(HASH_METHODS) if "dhash" in feats else []) + [m for m in EMB_METHODS if m in feats]
     edges = {m: score_bins(m) for m in methods}
     hist = {m: {k: np.zeros(len(edges[m]) - 1, np.int64) for k in ("pos", "neg", "neg_cls")} for m in methods}
@@ -351,7 +381,10 @@ def analyze(meta: pd.DataFrame, feats: dict, chunk: int = 256) -> dict:
     grouping.append({"method": "none (image split)", "threshold": "-", "value": None,
                      **grouping_metrics(np.arange(n), meta)})
     grouping.append({"method": "filenames", "threshold": "-", "value": None,
-                     **grouping_metrics(fam_codes, meta)})
+                     **grouping_metrics(src_codes, meta)})
+    if (fam_codes != src_codes).any():
+        grouping.append({"method": "filenames + same-photo list", "threshold": "-", "value": None,
+                         **grouping_metrics(fam_codes, meta)})
     return results, retrieval, pd.DataFrame(grouping)
 
 
@@ -364,6 +397,7 @@ def main() -> None:
     ap.add_argument("--methods", nargs="+", default=["hashes", *EMB_METHODS])
     ap.add_argument("--stage", choices=["features", "analyze", "all"], default="all")
     ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--same-photo", help="CSV of originals (file_a, file_b) found by eye to be one photograph")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
     try:
@@ -379,6 +413,9 @@ def main() -> None:
     else:
         meta = list_images(args.data_roots)
         meta.to_csv(meta_path, index=False)
+    if args.same_photo:
+        meta = merge_same_photo(meta, pd.read_csv(args.same_photo))
+        print(f"{meta.family.nunique() - meta.photo.nunique()} families merged as the same photograph")
     print(f"{len(meta)} images, {meta.is_original.sum()} originals, "
           f"{meta.family.nunique()} families", flush=True)
 
