@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import time
@@ -66,6 +67,24 @@ class RestoreBestWeights(keras.callbacks.Callback):
     def on_train_end(self, logs=None):
         if self.best_weights is not None:
             self.model.set_weights(self.best_weights)
+
+
+class FreeMemory(keras.callbacks.Callback):
+    """Collect garbage after every epoch.
+
+    With the torch backend, reference cycles keep each epoch's tensors alive
+    until Python's cycle collector happens to run. GPU memory then grows from
+    epoch to epoch and a 4 GB card runs out after a few epochs. Collecting
+    explicitly changes no numbers.
+    """
+
+    def on_epoch_end(self, epoch, logs=None):
+        gc.collect()
+        if keras.backend.backend() == "torch":
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 
 def predict(model, x, batch_size):
@@ -149,6 +168,7 @@ def fit(
 
     best = RestoreBestWeights()
     callbacks = [
+        FreeMemory(),
         best,
         keras.callbacks.EarlyStopping(
             monitor="val_loss", patience=cfg.early_stop_patience, restore_best_weights=False
