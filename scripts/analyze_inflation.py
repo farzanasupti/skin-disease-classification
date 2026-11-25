@@ -19,7 +19,7 @@ import os
 import pandas as pd
 
 SCHEME_LABEL = {"image": "By image", "hash": "Perceptual-hash groups", "photo": "Source-photograph groups"}
-METRICS = ("acc_internal", "acc_internal_originals", "acc_unseen", "gap",
+METRICS = ("acc_internal", "acc_internal_originals", "acc_unseen", "gap", "gap_originals",
            "internal_test_images_with_photo_in_train")
 
 
@@ -34,6 +34,7 @@ def main() -> None:
         raise SystemExit("no finished runs")
     df = pd.DataFrame(rows)
     df["gap"] = df["acc_internal"] - df["acc_unseen"]
+    df["gap_originals"] = df["acc_internal_originals"] - df["acc_unseen"]
     res = os.path.join(args.out_dir, "results")
     os.makedirs(res, exist_ok=True)
     df.to_csv(os.path.join(res, "inflation_runs.csv"), index=False)
@@ -75,18 +76,22 @@ def write_paper(df, pooled, paper_dir):
     for s in order:
         for model in sorted(df.loc[df.scheme == s, "model"].unique()):
             d = g.get_group((s, model))
-            cell = lambda c: f"{pct(d[c].mean())} $\\pm$ {pct(d[c].std())}"
+            cell = lambda c: f"{pct(d[c].mean())} $\\pm$ {pct(d[c].std())}".replace("-", "$-$", 1)
             rows.append(f"{SCHEME_LABEL[s]} & {model} & {pct(d['internal_test_images_with_photo_in_train'].mean())} & "
-                        f"{cell('acc_internal')} & {cell('acc_unseen')} & {cell('gap')} \\\\\n")
+                        f"{cell('acc_internal')} & {cell('acc_internal_originals')} & {cell('acc_unseen')} & "
+                        f"{cell('gap_originals')} \\\\\n")
         rows.append("\\hline\n")
     tex = ("\\begin{table}[!ht]\n\\centering\n"
            "\\caption{\\textbf{Accuracy under three ways of splitting the same data.} "
-           "Internal test: the held-out part of each split, all images, the number a study would report. "
+           "Internal test: the held-out part of each split, scored on all its images (the number a study would report) "
+           "and on its original photographs only. "
            "Unseen: the original photographs of the main experiment's test set, never used in any split. "
+           "Gap: internal test (originals) minus unseen. "
            "Mean $\\pm$ SD over seeds, in \\%.}\n\\label{tab:inflation}\n\\small\n"
-           "\\begin{tabular}{llrrrr}\n\\hline\n"
-           "\\textbf{Split} & \\textbf{Model} & \\textbf{Test images with photo in train} & "
-           "\\textbf{Internal test} & \\textbf{Unseen} & \\textbf{Gap} \\\\\n\\hline\n"
+           "\\begin{tabular}{llrrrrr}\n\\hline\n"
+           "& & \\textbf{Test images} & \\multicolumn{2}{c}{\\textbf{Internal test}} & & \\\\\n"
+           "\\textbf{Split} & \\textbf{Model} & \\textbf{with photo in train} & "
+           "\\textbf{All images} & \\textbf{Originals} & \\textbf{Unseen} & \\textbf{Gap} \\\\\n\\hline\n"
            + "".join(rows) + "\\end{tabular}\n\\end{table}\n")
     with open(os.path.join(paper_dir, "tables", "inflation.tex"), "w") as f:
         f.write(tex)
