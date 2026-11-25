@@ -233,15 +233,22 @@ def _hamming(a: np.uint64, b: np.ndarray) -> np.ndarray:
     return _POPCOUNT8[x].sum(axis=1)
 
 
-def build_groups(ds: Dataset, hash_threshold: int = 8) -> tuple[np.ndarray, dict]:
-    """Assign a group id to every image; return ids and grouping statistics."""
+def build_groups(
+    ds: Dataset, hash_threshold: int = 8, use_filenames: bool = True
+) -> tuple[np.ndarray, dict]:
+    """Assign a group id to every image; return ids and grouping statistics.
+
+    ``use_filenames=False`` groups by perceptual hashes alone. That is what a
+    careful user without the filename structure would do, and the split-inflation
+    experiment uses it to show that hashes miss most augmented copies.
+    """
     n = len(ds.labels)
     uf = _UnionFind(n)
 
     stems = list(ds.family)
     first_seen: dict[str, int] = {}
     name_links = 0
-    for i, s in enumerate(stems):
+    for i, s in enumerate(stems if use_filenames else []):
         if s in first_seen:
             uf.union(first_seen[s], i)
             name_links += 1

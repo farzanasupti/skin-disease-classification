@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import time
@@ -68,6 +69,24 @@ class RestoreBestWeights(keras.callbacks.Callback):
             self.model.set_weights(self.best_weights)
 
 
+class FreeMemory(keras.callbacks.Callback):
+    """Collect garbage after every epoch.
+
+    With the torch backend, reference cycles keep each epoch's tensors alive
+    until Python's cycle collector happens to run. GPU memory then grows from
+    epoch to epoch and a 4 GB card runs out after a few epochs. Collecting
+    explicitly changes no numbers.
+    """
+
+    def on_epoch_end(self, epoch, logs=None):
+        gc.collect()
+        if keras.backend.backend() == "torch":
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+
 def predict(model, x, batch_size):
     return model.predict(x, batch_size=batch_size, verbose=0)
 
@@ -114,6 +133,66 @@ def run_dir(cfg: Config, model_name: str, fold: int) -> str:
     return os.path.join(cfg.out_dir, "runs", f"{model_name}_fold{fold}")
 
 
+def fit(
+    cfg: Config,
+    model_name: str,
+    seed: int,
+    images: np.ndarray,
+    labels: np.ndarray,
+    tr: np.ndarray,
+    va: np.ndarray,
+    n_classes: int,
+    history_csv: str,
+):
+    """Build and train one model; return it with the best-val-loss weights restored."""
+    keras.utils.set_random_seed(seed)
+    model = build_model(
+        model_name,
+        n_classes,
+        img_size=cfg.img_size,
+        l2=cfg.l2,
+        pretrained=cfg.pretrained,
+        augment=True,
+        seed=seed,
+    )
+    model.compile(
+        optimizer=keras.optimizers.Adam(cfg.lr),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+    weights = compute_class_weight("balanced", classes=np.arange(n_classes), y=labels[tr])
+    y_tr = keras.utils.to_categorical(labels[tr], n_classes)
+    y_va = keras.utils.to_categorical(labels[va], n_classes)
+    x_tr = images[tr].astype("float32")
+    x_va = images[va].astype("float32")
+
+    best = RestoreBestWeights()
+    callbacks = [
+        FreeMemory(),
+        best,
+        keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=cfg.early_stop_patience, restore_best_weights=False
+        ),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss", factor=cfg.lr_factor, patience=cfg.lr_patience, min_lr=cfg.min_lr
+        ),
+        keras.callbacks.CSVLogger(history_csv),
+    ]
+    t0 = time.perf_counter()
+    history = model.fit(
+        x_tr,
+        y_tr,
+        validation_data=(x_va, y_va),
+        epochs=cfg.epochs(model_name),
+        batch_size=cfg.batch_size,
+        class_weight={i: float(w) for i, w in enumerate(weights)},
+        callbacks=callbacks,
+        shuffle=True,
+        verbose=2,
+    )
+    return model, history, best, (time.perf_counter() - t0) / 60
+
+
 def train_one(
     cfg: Config,
     model_name: str,
@@ -134,53 +213,11 @@ def train_one(
     va = np.nonzero(split_fold == fold)[0]
     te = np.nonzero(split_fold == -1)[0]
     seed = cfg.seed + 1000 * fold
-    keras.utils.set_random_seed(seed)
-
-    model = build_model(
-        model_name,
-        n_classes,
-        img_size=cfg.img_size,
-        l2=cfg.l2,
-        pretrained=cfg.pretrained,
-        augment=True,
-        seed=seed,
+    model, history, best, train_minutes = fit(
+        cfg, model_name, seed, images, labels, tr, va, n_classes, os.path.join(out, "history.csv")
     )
-    model.compile(
-        optimizer=keras.optimizers.Adam(cfg.lr),
-        loss="categorical_crossentropy",
-        metrics=["accuracy"],
-    )
-    weights = compute_class_weight("balanced", classes=np.arange(n_classes), y=labels[tr])
-    y_tr = keras.utils.to_categorical(labels[tr], n_classes)
-    y_va = keras.utils.to_categorical(labels[va], n_classes)
-    x_tr = images[tr].astype("float32")
     x_va = images[va].astype("float32")
     x_te = images[te].astype("float32")
-
-    best = RestoreBestWeights()
-    callbacks = [
-        best,
-        keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=cfg.early_stop_patience, restore_best_weights=False
-        ),
-        keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=cfg.lr_factor, patience=cfg.lr_patience, min_lr=cfg.min_lr
-        ),
-        keras.callbacks.CSVLogger(os.path.join(out, "history.csv")),
-    ]
-    t0 = time.perf_counter()
-    history = model.fit(
-        x_tr,
-        y_tr,
-        validation_data=(x_va, y_va),
-        epochs=cfg.epochs(model_name),
-        batch_size=cfg.batch_size,
-        class_weight={i: float(w) for i, w in enumerate(weights)},
-        callbacks=callbacks,
-        shuffle=True,
-        verbose=2,
-    )
-    train_minutes = (time.perf_counter() - t0) / 60
 
     np.savez_compressed(
         os.path.join(out, "predictions.npz"),
