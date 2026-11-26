@@ -20,7 +20,12 @@ import glob
 import json
 import os
 
+import sys
+
 import pandas as pd
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from skinclf.data import augmentation_families, source_stem  # noqa: E402
 
 SCHEME_LABEL = {"image": "By image", "hash": "Perceptual-hash groups", "photo": "Source-photograph groups"}
 MODEL_LABEL = {"DINOv2probe": "DINOv2 probe$^a$"}
@@ -29,6 +34,7 @@ PROBE_NOTE = ("\\begin{flushleft}\n$^a$ Logistic regression on frozen DINOv2 ViT
               "\\end{flushleft}\n")
 METRICS = ("acc_internal", "acc_internal_originals", "acc_unseen", "gap", "gap_originals",
            "internal_test_images_with_photo_in_train")
+COUNTS = ("train_photos",)
 
 
 def main() -> None:
@@ -63,7 +69,28 @@ def load_runs(out_dir):
     df = pd.DataFrame(rows)
     df["gap"] = df["acc_internal"] - df["acc_unseen"]
     df["gap_originals"] = df["acc_internal_originals"] - df["acc_unseen"]
+    photos = train_photos(out_dir)
+    if photos:
+        df["train_photos"] = [photos.get((s, int(k))) for s, k in zip(df["scheme"], df["seed"])]
     return df
+
+
+def train_photos(out_dir):
+    """Distinct source photographs with at least one image in each split's training part.
+
+    The image-level split puts copies of almost every development photograph into
+    training; a grouped split holds out whole photographs. Counting them shows how
+    many different photographs each model learned from.
+    """
+    out = {}
+    for path in sorted(glob.glob(os.path.join(out_dir, "splits", "*_seed*.csv"))):
+        scheme, seed = os.path.basename(path)[:-4].rsplit("_seed", 1)
+        sp = pd.read_csv(path)
+        cls = [f.split("/")[-2] for f in sp["file"]]
+        family, _ = augmentation_families([source_stem(f) for f in sp["file"]], cls)
+        sp["family"] = family
+        out[(scheme, int(seed))] = int(sp.loc[sp["part"] == "train", "family"].nunique())
+    return out
 
 
 def pct(x):
@@ -84,6 +111,18 @@ def write_paper(df, pooled, paper_dir, extra):
     for (s, model), d in both.groupby(["scheme", "model"]):
         for m in METRICS:
             lines.append(f"\\expandafter\\def\\csname res@infl-{s}-{model}@{m}\\endcsname{{{pct(d[m].mean())}}}\n")
+    # The leak measured within one test population: internal-test originals under a
+    # leaky split against the same quantity under the photograph-level split.
+    if "photo" in order:
+        ref = pooled.loc[("photo", "all models"), ("acc_internal_originals", "mean")]
+        for s in order:
+            if s != "photo":
+                v = pooled.loc[(s, "all models"), ("acc_internal_originals", "mean")] - ref
+                lines.append(f"\\expandafter\\def\\csname res@infl-{s}@internal_vs_photo\\endcsname{{{pct(v)}}}\n")
+    if "train_photos" in df:
+        for s in order:
+            v = df.loc[df.scheme == s].drop_duplicates("seed")["train_photos"]
+            lines.append(f"\\expandafter\\def\\csname res@infl-{s}@train_photos\\endcsname{{{v.mean():.0f}}}\n")
     lines.append(f"\\expandafter\\def\\csname res@infl@n_runs\\endcsname{{{len(df)}}}\n")
     lines.append(f"\\expandafter\\def\\csname res@infl@n_seeds\\endcsname{{{df['seed'].nunique()}}}\n")
     lines.append(f"\\expandafter\\def\\csname res@infl@n_unseen\\endcsname{{{int(df['n_unseen_photos'].iloc[0])}}}\n")

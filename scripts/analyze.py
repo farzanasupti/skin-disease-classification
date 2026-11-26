@@ -40,6 +40,7 @@ from skinclf.models import MODEL_NAMES  # noqa: E402
 
 ENSEMBLE = "Ensemble"
 REFERRAL_RATES = (0.0, 0.05, 0.1, 0.2, 0.3)
+RELIABILITY_BINS = 5  # for the diagram only; ECE uses 15
 
 
 def load_runs(out_dir: str, n_folds: int):
@@ -56,6 +57,12 @@ def load_runs(out_dir: str, n_folds: int):
         if per_fold:
             runs[name] = per_fold
     return runs
+
+
+def _label(c):
+    """Class name for display: underscores to spaces, first letter upper-cased (SJS-TEN unchanged)."""
+    c = c.replace("_", " ")
+    return c[:1].upper() + c[1:]
 
 
 def fmt_pct(x):
@@ -189,11 +196,23 @@ def main() -> None:
         }
         for rate, acc in M.referral_curve(y_test, mc[m], h_mc, REFERRAL_RATES).items():
             unc[f"acc_refer_{int(rate * 100)}"] = acc
+        # The same referral without MC dropout: deterministic probabilities ranked
+        # by their own softmax entropy.
+        for rate, acc in M.referral_curve(y_test, det[m], h_det, REFERRAL_RATES).items():
+            unc[f"acc_refer_det_{int(rate * 100)}"] = acc
+        unc.update(uncertainty_cis(y_test, g_test, det[m], mc[m], h_det, h_mc, mi, args.n_boot))
         unc_rows.append(unc)
     test = pd.DataFrame(test_rows).set_index("model")
     unc = pd.DataFrame(unc_rows).set_index("model")
     test.to_csv(os.path.join(res_dir, "test_metrics.csv"))
     unc.to_csv(os.path.join(res_dir, "uncertainty.csv"))
+    h_ens_det = M.predictive_entropy(det[ENSEMBLE])
+    mc_vs_det = mc_minus_det(
+        y_test, g_test, det[ENSEMBLE], mc[ENSEMBLE], h_ens_det,
+        M.predictive_entropy(mc[ENSEMBLE]), M.mutual_information(mc_samples[ENSEMBLE]), args.n_boot,
+    )
+    with open(os.path.join(res_dir, "ensemble_mc_minus_det.json"), "w") as f:
+        json.dump(mc_vs_det, f, indent=2)
 
     correct = {m: det[m].argmax(1) == y_test for m in report}
     mcn = pd.DataFrame(S.pairwise_mcnemar(correct))
@@ -246,10 +265,84 @@ def main() -> None:
     write_numbers(
         os.path.join(args.paper_dir, "numbers.tex"),
         cfg, split, classes, test, unc, eff, cv_mean, cv_std, fried, mcn, summary, args.out_dir,
+        mc_vs_det,
     )
     write_tables(tab_dir, order, test, unc, eff, cv_mean, cv_std, per_class, classes, mcn)
     make_figures(fig_dir, y_test, det, mc, best_single, classes, cv, order)
     print(json.dumps(summary, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap intervals for the uncertainty metrics
+# ---------------------------------------------------------------------------
+def _calibration(y, probs):
+    return {
+        "ece": M.ece(y, probs),
+        "nll": float(-np.mean(np.log(probs[np.arange(len(y)), y] + M.EPS))),
+        "brier": M.brier(y, probs),
+    }
+
+
+def _uncertainty_stats(y, det, mc, h_det, h_mc, mi, refer=0.2):
+    """Calibration, error detection and 20% referral, deterministic and MC."""
+    out = {}
+    for tag, probs in (("det", det), ("mc", mc)):
+        for k, v in _calibration(y, probs).items():
+            out[f"{k}_{tag}"] = v
+    out["err_auroc_softmax_entropy"] = M.error_detection_auroc(y, det, h_det)
+    out["err_auroc_mc_entropy"] = M.error_detection_auroc(y, mc, h_mc)
+    out["err_auroc_mutual_info"] = M.error_detection_auroc(y, mc, mi)
+    out["refer_det"] = M.referral_curve(y, det, h_det, (refer,))[refer]
+    out["refer_mc"] = M.referral_curve(y, mc, h_mc, (refer,))[refer]
+    return out
+
+
+def _group_boot(y, groups, fn, n_boot, seed=0):
+    """Draws of fn(index array) over group-bootstrap resamples of the test set."""
+    rng = np.random.default_rng(seed)
+    ug, inv = np.unique(groups, return_inverse=True)
+    members = [np.nonzero(inv == g)[0] for g in range(len(ug))]
+    draws = []
+    for _ in range(n_boot):
+        pick = rng.integers(0, len(ug), len(ug))
+        draws.append(fn(np.concatenate([members[g] for g in pick])))
+    return pd.DataFrame(draws)
+
+
+def _ci(v):
+    v = np.asarray(v, dtype=float)
+    v = v[~np.isnan(v)]  # AUROC is undefined in a resample without errors
+    return float(np.quantile(v, 0.025)), float(np.quantile(v, 0.975))
+
+
+def uncertainty_cis(y, groups, det, mc, h_det, h_mc, mi, n_boot):
+    """95% group-bootstrap intervals for ECE, NLL, Brier and the error-detection AUROCs."""
+    draws = _group_boot(
+        y, groups, lambda i: _uncertainty_stats(y[i], det[i], mc[i], h_det[i], h_mc[i], mi[i]), n_boot
+    )
+    out = {}
+    for c in draws.columns:
+        if c.startswith("refer"):
+            continue
+        out[f"{c}_lo"], out[f"{c}_hi"] = _ci(draws[c])
+    return out
+
+
+def mc_minus_det(y, groups, det, mc, h_det, h_mc, mi, n_boot):
+    """Paired differences, MC dropout minus deterministic, with group-bootstrap intervals."""
+    def diffs(i):
+        s = _uncertainty_stats(y[i], det[i], mc[i], h_det[i], h_mc[i], mi[i])
+        return {
+            "ece": s["ece_mc"] - s["ece_det"],
+            "nll": s["nll_mc"] - s["nll_det"],
+            "brier": s["brier_mc"] - s["brier_det"],
+            "auroc_mc_entropy": s["err_auroc_mc_entropy"] - s["err_auroc_softmax_entropy"],
+            "auroc_mutual_info": s["err_auroc_mutual_info"] - s["err_auroc_softmax_entropy"],
+            "refer20": s["refer_mc"] - s["refer_det"],
+        }
+    point = diffs(np.arange(len(y)))
+    draws = _group_boot(y, groups, diffs, n_boot)
+    return {k: {"diff": float(v), "lo": _ci(draws[k])[0], "hi": _ci(draws[k])[1]} for k, v in point.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +352,8 @@ def _macro(key, metric, value):
     return f"\\expandafter\\def\\csname res@{key}@{metric}\\endcsname{{{value}}}\n"
 
 
-def write_numbers(path, cfg, split, classes, test, unc, eff, cv_mean, cv_std, fried, mcn, summary, out_dir):
+def write_numbers(path, cfg, split, classes, test, unc, eff, cv_mean, cv_std, fried, mcn, summary, out_dir,
+                  mc_vs_det):
     lines = [
         "% Generated by scripts/analyze.py. Do not edit by hand.\n",
         "\\providecommand{\\res}[2]{\\csname res@#1@#2\\endcsname}\n",
@@ -299,6 +393,15 @@ def write_numbers(path, cfg, split, classes, test, unc, eff, cv_mean, cv_std, fr
             lines.append(_macro(key, metric, fmt3(u[metric])))
         for rate in REFERRAL_RATES:
             lines.append(_macro(key, f"acc_refer_{int(rate * 100)}", fmt_pct(u[f"acc_refer_{int(rate * 100)}"])))
+            lines.append(_macro(key, f"acc_refer_det_{int(rate * 100)}", fmt_pct(u[f"acc_refer_det_{int(rate * 100)}"])))
+        lines.append(_macro(key, "accuracy_mc", fmt_pct(u["accuracy_mc"])))
+        for metric in ("ece_det", "ece_mc"):
+            lines.append(_macro(key, f"{metric}_ci", f"{fmt_pct(u[metric + '_lo'])}--{fmt_pct(u[metric + '_hi'])}"))
+        for metric in ("nll_det", "nll_mc", "brier_det", "brier_mc"):
+            lines.append(_macro(key, metric, fmt3(u[metric])))
+            lines.append(_macro(key, f"{metric}_ci", f"{fmt3(u[metric + '_lo'])}--{fmt3(u[metric + '_hi'])}"))
+        for metric in ("err_auroc_softmax_entropy", "err_auroc_mc_entropy", "err_auroc_mutual_info"):
+            lines.append(_macro(key, f"{metric}_ci", f"{fmt3(u[metric + '_lo'])}--{fmt3(u[metric + '_hi'])}"))
         if m in cv_mean.index:
             for metric in ("accuracy", "f1_macro", "balanced_accuracy"):
                 lines.append(_macro(key, f"cv_{metric}", fmt_pct(cv_mean.loc[m, metric])))
@@ -324,13 +427,30 @@ def write_numbers(path, cfg, split, classes, test, unc, eff, cv_mean, cv_std, fr
     if len(ens_best):
         lines.append(_macro("summary", "mcnemar_ens_vs_best_p", _pfmt(ens_best.p_holm.iloc[0])))
     lines.append(_macro("summary", "n_sig_pairs", int((mcn.p_holm < 0.05).sum())))
+    lines.append(_macro("summary", "n_sig_pairs_raw", int((mcn.p < 0.05).sum())))
     lines.append(_macro("summary", "n_pairs", len(mcn)))
+    if len(ens_best):
+        lines.append(_macro("summary", "mcnemar_ens_vs_best_p_raw", _pfmt(ens_best.p.iloc[0])))
+    # Every pair's unadjusted p, keyed by both orders: \res{mcnemar}{A-B}
+    for r in mcn.itertuples():
+        for a, b in ((r.a, r.b), (r.b, r.a)):
+            lines.append(_macro("mcnemar", f"{a}-{b}", _pfmt(r.p)))
+    # Ensemble, MC dropout minus deterministic: \res{mcdiff}{<metric>} and _ci
+    for k, d in mc_vs_det.items():
+        f = fmt_pct if k in ("ece", "refer20") else fmt3
+        lines.append(_macro("mcdiff", k, _signed(f(d["diff"]))))
+        lines.append(_macro("mcdiff", f"{k}_ci", f"{_signed(f(d['lo']))} to {_signed(f(d['hi']))}"))
     with open(path, "w") as f:
         f.writelines(lines)
 
 
 def _pfmt(p):
     return "<0.001" if p < 0.001 else f"{p:.3f}"
+
+
+def _signed(s):
+    """Typeset a formatted number with a true minus sign."""
+    return s.replace("-", "$-$", 1) if s.startswith("-") else s
 
 
 def _tex(df: pd.DataFrame, path: str, caption: str, label: str, colfmt: str):
@@ -403,30 +523,59 @@ def write_tables(tab_dir, order, test, unc, eff, cv_mean, cv_std, per_class, cla
 
     for m, df in per_class.items():
         t = df.copy()
-        t.insert(0, "Class", [c.replace("_", " ") for c in t.index])
+        t.insert(0, "Class", [_label(c) for c in t.index])
         for c in ("precision", "recall", "f1"):
             t[c] = [fmt_pct(v) for v in t[c]]
         t.columns = ["Class", "Precision (\\%)", "Recall (\\%)", "F1 (\\%)", "Support"]
         _tex(t, os.path.join(tab_dir, f"per_class_{m}.tex"),
              f"Per-class held-out test performance of {m}.", f"tab:perclass-{m}", "lcccr")
 
+    ci = lambda col, f: [f"{f(a)} [{f(lo)}, {f(hi)}]" for a, lo, hi in zip(u[col], u[col + "_lo"], u[col + "_hi"])]  # noqa: E731
+    _tex(pd.DataFrame({
+        "Model": u.index,
+        "ECE det. (\\%)": ci("ece_det", fmt_pct),
+        "ECE MC (\\%)": ci("ece_mc", fmt_pct),
+        "Brier det.": ci("brier_det", fmt3),
+        "Brier MC": ci("brier_mc", fmt3),
+        "NLL det.": ci("nll_det", fmt3),
+        "NLL MC": ci("nll_mc", fmt3),
+    }), os.path.join(tab_dir, "calibration_ci.tex"),
+        "Calibration on the held-out test set with 95\\% group-bootstrap confidence intervals. "
+        "ECE: expected calibration error (15 equal-width bins); Brier: multi-class Brier score; "
+        "NLL: negative log-likelihood. det.: deterministic; MC: Monte Carlo dropout.",
+        "tab:calibration-ci", "lcccccc")
+    _tex(pd.DataFrame({
+        "Model": u.index,
+        "Softmax entropy (det.)": ci("err_auroc_softmax_entropy", fmt3),
+        "Predictive entropy (MC)": ci("err_auroc_mc_entropy", fmt3),
+        "Mutual information (MC)": ci("err_auroc_mutual_info", fmt3),
+        "Acc. @20\\% det.": [fmt_pct(v) for v in u.acc_refer_det_20],
+        "Acc. @20\\% MC": [fmt_pct(v) for v in u.acc_refer_20],
+    }), os.path.join(tab_dir, "errdetect_ci.tex"),
+        "Error detection on the held-out test set: AUROC of each uncertainty score for separating "
+        "misclassified from correctly classified photographs, with 95\\% group-bootstrap confidence "
+        "intervals, and accuracy on the cases kept after referring the 20\\% most uncertain, "
+        "ranked by softmax entropy (det.) or MC-dropout predictive entropy (MC).",
+        "tab:errdetect-ci", "lccccc")
+
     mt = mcn.copy()
+    mt["p"] = [_pfmt(p) for p in mt.p]
     mt["p (Holm)"] = [_pfmt(p) for p in mt.p_holm]
     mt = mt.rename(columns={"a": "Model A", "b": "Model B", "a_only_correct": "A only correct", "b_only_correct": "B only correct"})
-    _tex(mt[["Model A", "Model B", "A only correct", "B only correct", "p (Holm)"]],
+    _tex(mt[["Model A", "Model B", "A only correct", "B only correct", "p", "p (Holm)"]],
          os.path.join(tab_dir, "mcnemar.tex"),
-         "Pairwise exact McNemar tests on held-out test predictions, Holm-corrected.",
-         "tab:mcnemar", "llrrr")
+         "Pairwise exact McNemar tests on held-out test predictions: unadjusted p and Holm-corrected over all pairs.",
+         "tab:mcnemar", "llrrrr")
 
 
 # ---------------------------------------------------------------------------
 # Figures
 # ---------------------------------------------------------------------------
 def make_figures(fig_dir, y, det, mc, best, classes, cv, order):
-    short = [c.replace("_", " ") for c in classes]
+    short = [_label(c) for c in classes]
     plt.rcParams.update({"font.size": 9, "savefig.dpi": 300, "savefig.bbox": "tight"})
 
-    fig, axes = plt.subplots(1, 2, figsize=(9, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.6), layout="constrained")
     for ax, m in zip(axes, (best, ENSEMBLE)):
         cm = confusion_matrix(y, det[m].argmax(1), labels=range(len(classes)))
         cmn = cm / cm.sum(1, keepdims=True)
@@ -444,11 +593,17 @@ def make_figures(fig_dir, y, det, mc, best, classes, cv, order):
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(4, 4))
-    ax.plot([0, 1], [0, 1], ls="--", c="grey", lw=1)
-    for m, probs, style in ((best, det[best], "-"), (best, mc[best], "--"), (ENSEMBLE, mc[ENSEMBLE], ":")):
-        rc = M.reliability_curve(y, probs)
+    ax.plot([0.2, 1], [0.2, 1], ls="--", c="grey", lw=1)
+    for m, probs, style in ((best, det[best], "-"), (best, mc[best], "--"),
+                            (ENSEMBLE, det[ENSEMBLE], "-."), (ENSEMBLE, mc[ENSEMBLE], ":")):
+        # Five bins for legibility: with 45 photographs, 15 bins leave most nearly empty.
+        rc = M.reliability_curve(y, probs, n_bins=RELIABILITY_BINS)
         tag = "MC dropout" if probs is not det[m] else "deterministic"
-        ax.plot(rc[:, 0], rc[:, 1], style, marker="o", ms=3, label=f"{m}, {tag}")
+        # Marker area grows with the number of photographs in the bin.
+        line, = ax.plot(rc[:, 0], rc[:, 1], style, lw=1, label=f"{m}, {tag}")
+        ax.scatter(rc[:, 0], rc[:, 1], s=6 * rc[:, 2], color=line.get_color(), alpha=0.6)
+    ax.set_xlim(0.2, 1.0)
+    ax.set_ylim(-0.02, 1.02)
     ax.set_xlabel("Confidence")
     ax.set_ylabel("Accuracy")
     ax.legend(fontsize=7)
@@ -456,15 +611,20 @@ def make_figures(fig_dir, y, det, mc, best, classes, cv, order):
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(4.5, 3.5))
-    rates = np.linspace(0, 0.5, 26)
-    for m in (best, ENSEMBLE):
-        h = M.predictive_entropy(mc[m])
-        curve = M.referral_curve(y, mc[m], h, rates)
-        ax.plot(100 * rates, [100 * curve[r] for r in rates], label=f"{m}, MC entropy")
-        rng = np.random.default_rng(0)
-        rand = M.referral_curve(y, mc[m], rng.random(len(y)), rates)
-        ax.plot(100 * rates, [100 * rand[r] for r in rates], ls=":", c="grey",
-                label="random referral" if m == best else None)
+    rates = np.linspace(0, 0.3, 16)
+    curves = (
+        (best, mc[best], "MC dropout, predictive entropy", "-", "tab:blue"),
+        (ENSEMBLE, mc[ENSEMBLE], "MC dropout, predictive entropy", "-", "tab:orange"),
+        (ENSEMBLE, det[ENSEMBLE], "deterministic, softmax entropy", "--", "tab:orange"),
+    )
+    for m, probs, tag, ls, colour in curves:
+        curve = M.referral_curve(y, probs, M.predictive_entropy(probs), rates)
+        ax.plot(100 * rates, [100 * curve[r] for r in rates], ls=ls, c=colour, label=f"{m}, {tag}")
+        # Referring at random leaves expected accuracy at the no-referral level.
+        if probs is det[ENSEMBLE] or m == best:
+            base = 100 * float(np.mean(probs.argmax(1) == y))
+            ax.axhline(base, ls=":", c=colour, lw=1)
+    ax.plot([], [], ls=":", c="grey", lw=1, label="random referral (expected)")
     ax.set_xlabel("Cases referred to a clinician (%)")
     ax.set_ylabel("Accuracy on retained cases (%)")
     ax.legend(fontsize=7)
