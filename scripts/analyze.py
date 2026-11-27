@@ -638,6 +638,10 @@ def make_figures(fig_dir, y, det, mc, best, classes, cv, order):
         ax.hlines(v.mean(), i - 0.3, i + 0.3, colors="k")
     ax.set_xticks(range(len(order)), order, rotation=30, ha="right")
     ax.set_ylabel("Validation macro-F1 (%)")
+    # Pad the y-axis so no fold sits on the frame.
+    allv = 100 * cv["f1_macro"].to_numpy()
+    pad = 0.08 * (allv.max() - allv.min())
+    ax.set_ylim(allv.min() - pad, allv.max() + pad)
     fig.savefig(os.path.join(fig_dir, "cv_folds.pdf"))
     plt.close(fig)
 
