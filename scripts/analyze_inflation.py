@@ -146,6 +146,7 @@ def write_paper(df, pooled, paper_dir, extra):
            "Internal test: the held-out part of each split, scored on all its images (the number a study would report) "
            "and on its original photographs only. "
            "Unseen: the original photographs of the main experiment's test set, never used in any split. "
+           "Test images with photo in train: share of internal-test images whose source photograph has at least one image in training. "
            "Gap: internal test (originals) minus unseen. "
            "Mean $\\pm$ SD over seeds, in \\%.}\n\\label{tab:inflation}\n\\small\n"
            "\\begin{tabular}{llrrrrr}\n\\hline\n"
