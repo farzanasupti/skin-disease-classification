@@ -490,7 +490,7 @@ def write_tables(tab_dir, order, test, unc, eff, cv_mean, cv_std, per_class, cla
             "AUC (\\%)": fmt_pct(t.auc_macro_ovr) if "auc_macro_ovr" in t else "--",
         })
     _tex(pd.DataFrame(rows), os.path.join(tab_dir, "test.tex"),
-         "Held-out test performance. Each model's fold models are averaged; Ensemble averages the top models chosen on cross-validation. Brackets: 95\\% group-bootstrap confidence intervals.",
+         "Held-out test performance. Each model's fold models are averaged; Ensemble averages the three models ranked highest in cross-validation. Brackets: 95\\% group-bootstrap confidence intervals.",
          "tab:test", "lccccc")
 
     u = unc.loc[test.index]
@@ -506,7 +506,7 @@ def write_tables(tab_dir, order, test, unc, eff, cv_mean, cv_std, per_class, cla
         "Acc. @20\\% referred": [fmt_pct(v) for v in u.acc_refer_20],
     })
     _tex(unc_tab, os.path.join(tab_dir, "uncertainty.tex"),
-         "Calibration and uncertainty on the held-out test set. ECE in \\%. AUROC$_\\text{err}$: how well each uncertainty score separates wrong from correct predictions. Last column: accuracy on the 80\\% of cases kept after referring the 20\\% with the highest MC-dropout entropy.",
+         "Calibration and uncertainty on the held-out test set. ECE in \\%. AUROC$_\\text{err}$: how well each score separates wrong from correct predictions (softmax H: deterministic; MC H and MI: MC dropout). Last column: accuracy on the 80\\% of cases kept after referring the 20\\% with the highest MC-dropout entropy; the same with deterministic softmax entropy is in S1 Appendix, Table D.",
          "tab:uncertainty", "lcccccccc")
 
     eff_tab = pd.DataFrame({
@@ -528,7 +528,7 @@ def write_tables(tab_dir, order, test, unc, eff, cv_mean, cv_std, per_class, cla
             t[c] = [fmt_pct(v) for v in t[c]]
         t.columns = ["Class", "Precision (\\%)", "Recall (\\%)", "F1 (\\%)", "Support"]
         _tex(t, os.path.join(tab_dir, f"per_class_{m}.tex"),
-             f"Per-class held-out test performance of {m}.", f"tab:perclass-{m}", "lcccr")
+             f"Per-class held-out test performance of {'the ensemble' if m == 'Ensemble' else m}.", f"tab:perclass-{m}", "lcccr")
 
     ci = lambda col, f: [f"{f(a)} [{f(lo)}, {f(hi)}]" for a, lo, hi in zip(u[col], u[col + "_lo"], u[col + "_hi"])]  # noqa: E731
     _tex(pd.DataFrame({
@@ -564,7 +564,7 @@ def write_tables(tab_dir, order, test, unc, eff, cv_mean, cv_std, per_class, cla
     mt = mt.rename(columns={"a": "Model A", "b": "Model B", "a_only_correct": "A only correct", "b_only_correct": "B only correct"})
     _tex(mt[["Model A", "Model B", "A only correct", "B only correct", "p", "p (Holm)"]],
          os.path.join(tab_dir, "mcnemar.tex"),
-         "Pairwise exact McNemar tests on held-out test predictions: unadjusted p and Holm-corrected over all pairs.",
+         f"Pairwise exact McNemar tests on held-out test predictions: unadjusted p and Holm-corrected p over all {len(mt)} pairs.",
          "tab:mcnemar", "llrrrr")
 
 
